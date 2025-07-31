@@ -62,7 +62,7 @@ export function CSVImport({ onImport }: CSVImportProps) {
         setAvailableColumns(headers)
         setPreviewData(data.slice(1, 6)) // Show first 5 rows for preview
         
-        // Auto-detect columns based on common patterns
+        // Auto-detect columns based on common patterns (including new format)
         const autoMapping = {
           date: '',
           grossValue: '',
@@ -71,11 +71,15 @@ export function CSVImport({ onImport }: CSVImportProps) {
 
         headers.forEach((header, index) => {
           const lowerHeader = header.toLowerCase()
-          if (lowerHeader.includes('data') || lowerHeader.includes('date')) {
+          if (lowerHeader.includes('data') || lowerHeader.includes('date') || 
+              (lowerHeader.includes('ano') || lowerHeader.includes('mês') || lowerHeader.includes('dia'))) {
             autoMapping.date = header
-          } else if (lowerHeader.includes('bruto') || lowerHeader.includes('gross') || lowerHeader.includes('total')) {
+          } else if (lowerHeader.includes('bruto') || lowerHeader.includes('gross') || 
+                     lowerHeader.includes('valor vendas') || lowerHeader.includes('total')) {
             autoMapping.grossValue = header
-          } else if (lowerHeader.includes('líquido') || lowerHeader.includes('liquido') || lowerHeader.includes('net') || lowerHeader.includes('valor')) {
+          } else if (lowerHeader.includes('líquido') || lowerHeader.includes('liquido') || 
+                     lowerHeader.includes('net') || lowerHeader.includes('recebido') || 
+                     lowerHeader.includes('valor')) {
             autoMapping.netValue = header
           }
         })
@@ -91,8 +95,37 @@ export function CSVImport({ onImport }: CSVImportProps) {
     }
   }
 
-  const parseBrazilianDate = (dateStr: string): string => {
+  const parseBrazilianDate = (dateStr: string, row?: any[], headers?: string[]): string => {
     if (!dateStr) return new Date().toISOString()
+    
+    // Check if we have separate year, month, day columns (new format)
+    if (row && headers) {
+      const yearIndex = headers.findIndex(h => h.toLowerCase().includes('ano'))
+      const monthIndex = headers.findIndex(h => h.toLowerCase().includes('mês'))
+      const dayIndex = headers.findIndex(h => h.toLowerCase().includes('dia'))
+      
+      if (yearIndex !== -1 && monthIndex !== -1 && dayIndex !== -1) {
+        const year = row[yearIndex]
+        const monthName = row[monthIndex]
+        const day = row[dayIndex]
+        
+        // Convert Portuguese month names to numbers
+        const monthMap: { [key: string]: number } = {
+          'janeiro': 1, 'fevereiro': 2, 'março': 3, 'abril': 4,
+          'maio': 5, 'junho': 6, 'julho': 7, 'agosto': 8,
+          'setembro': 9, 'outubro': 10, 'novembro': 11, 'dezembro': 12
+        }
+        
+        const monthNumber = monthMap[monthName.toLowerCase()] || parseInt(monthName)
+        
+        if (year && monthNumber && day) {
+          const date = new Date(parseInt(year), monthNumber - 1, parseInt(day))
+          if (!isNaN(date.getTime())) {
+            return date.toISOString()
+          }
+        }
+      }
+    }
     
     // Remove any extra characters and trim
     const cleanDate = dateStr.toString().trim()
@@ -163,20 +196,60 @@ export function CSVImport({ onImport }: CSVImportProps) {
       throw new Error('Mapeamento de colunas incompleto')
     }
 
+    // Check if we have the new format with separate date columns
+    const hasNewFormat = availableColumns.some(col => 
+      col.toLowerCase().includes('ano') || 
+      col.toLowerCase().includes('mês') || 
+      col.toLowerCase().includes('dia')
+    )
+
     data.forEach((row, index) => {
-      if (!row || row.length === 0) return
+      if (!row || row.length === 0 || row[0] === 'Total') return // Skip total row
       
       try {
-        const date = parseBrazilianDate(row[dateIndex])
+        let date: string
+        
+        if (hasNewFormat) {
+          // For new format, pass the entire row and headers to parse date
+          date = parseBrazilianDate(row[dateIndex], row, availableColumns)
+        } else {
+          // For old format, just parse the date string
+          date = parseBrazilianDate(row[dateIndex])
+        }
+        
         const grossValue = parseValue(row[grossIndex])
         const netValue = parseValue(row[netIndex])
 
-        if (grossValue > 0 || netValue > 0) {
+        // For new format, we might need to multiply by quantity
+        const quantityIndex = availableColumns.findIndex(col => 
+          col.toLowerCase().includes('vendas') && !col.toLowerCase().includes('valor')
+        )
+        
+        let finalGrossValue = grossValue
+        let finalNetValue = netValue
+        
+        if (hasNewFormat && quantityIndex !== -1) {
+          const quantity = parseInt(row[quantityIndex]) || 1
+          // The values in the new format are already totals, so we don't multiply
+          finalGrossValue = grossValue
+          finalNetValue = netValue
+          
+          // Create individual sales for each quantity
+          for (let i = 0; i < quantity; i++) {
+            sales.push({
+              id: generateId(),
+              date,
+              grossValue: grossValue / quantity,
+              netValue: netValue / quantity,
+              source: 'pushinpay'
+            })
+          }
+        } else if (finalGrossValue > 0 || finalNetValue > 0) {
           sales.push({
             id: generateId(),
             date,
-            grossValue,
-            netValue,
+            grossValue: finalGrossValue,
+            netValue: finalNetValue,
             source: 'pushinpay'
           })
         }
@@ -248,19 +321,19 @@ export function CSVImport({ onImport }: CSVImportProps) {
 
   const downloadExampleFile = () => {
     const exampleData = [
-      ['Data', 'Valor Bruto', 'Valor Líquido'],
-      ['01/01/2024', 'R$ 150,00', 'R$ 142,50'],
-      ['02/01/2024', 'R$ 200,00', 'R$ 190,00'],
-      ['03/01/2024', 'R$ 175,00', 'R$ 166,25'],
-      ['04/01/2024', 'R$ 300,00', 'R$ 285,00'],
-      ['05/01/2024', 'R$ 125,00', 'R$ 118,75']
+      ['Ano', 'Mês', 'Dia', 'Vendas', 'Valor Vendas', 'Total Recebido'],
+      ['2024', 'Janeiro', '1', '2', '29,80', '28,31'],
+      ['2024', 'Janeiro', '2', '1', '14,90', '14,16'],
+      ['2024', 'Janeiro', '3', '3', '44,70', '42,47'],
+      ['2024', 'Janeiro', '4', '1', '14,90', '14,16'],
+      ['2024', 'Janeiro', '5', '2', '29,80', '28,31']
     ]
 
     const worksheet = XLSX.utils.aoa_to_sheet(exampleData)
     const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Vendas PushinPay')
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Vendas Diárias')
     
-    XLSX.writeFile(workbook, 'exemplo-vendas-pushinpay.xlsx')
+    XLSX.writeFile(workbook, 'exemplo-vendas-diarias.xlsx')
     
     toast({
       title: "Sucesso!",
@@ -273,10 +346,10 @@ export function CSVImport({ onImport }: CSVImportProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Upload className="h-5 w-5" />
-          Importar Vendas PushinPay
+          Importar Vendas
         </CardTitle>
         <CardDescription>
-          Importe suas vendas através de arquivos CSV ou Excel (.xlsx)
+          Importe suas vendas através de arquivos CSV ou Excel (.xlsx). Suporta formatos de vendas diárias e relatórios do PushinPay.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -318,7 +391,7 @@ export function CSVImport({ onImport }: CSVImportProps) {
             <h4 className="font-medium">Mapeamento de Colunas</h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label>Coluna de Data</Label>
+                <Label>Coluna de Data (ou Ano para formato diário)</Label>
                 <Select value={columnMapping.date} onValueChange={(value) => setColumnMapping({...columnMapping, date: value})}>
                   <SelectTrigger>
                     <SelectValue placeholder="Selecione a coluna" />
@@ -332,7 +405,7 @@ export function CSVImport({ onImport }: CSVImportProps) {
               </div>
 
               <div className="space-y-2">
-                <Label>Coluna de Valor Bruto</Label>
+                <Label>Coluna de Valor Bruto (Valor Vendas)</Label>
                 <Select value={columnMapping.grossValue} onValueChange={(value) => setColumnMapping({...columnMapping, grossValue: value})}>
                   <SelectTrigger>
                     <SelectValue placeholder="Selecione a coluna" />
@@ -346,7 +419,7 @@ export function CSVImport({ onImport }: CSVImportProps) {
               </div>
 
               <div className="space-y-2">
-                <Label>Coluna de Valor Líquido</Label>
+                <Label>Coluna de Valor Líquido (Total Recebido)</Label>
                 <Select value={columnMapping.netValue} onValueChange={(value) => setColumnMapping({...columnMapping, netValue: value})}>
                   <SelectTrigger>
                     <SelectValue placeholder="Selecione a coluna" />
@@ -359,6 +432,16 @@ export function CSVImport({ onImport }: CSVImportProps) {
                 </Select>
               </div>
             </div>
+          </div>
+        )}
+
+        {availableColumns.length > 0 && (
+          <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
+            <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">Formatos Suportados:</h4>
+            <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
+              <li>• <strong>Formato Diário:</strong> Ano, Mês, Dia, Vendas, Valor Vendas, Total Recebido</li>
+              <li>• <strong>Formato PushinPay:</strong> Data, Valor Bruto, Valor Líquido</li>
+            </ul>
           </div>
         )}
 
