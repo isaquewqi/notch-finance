@@ -10,6 +10,7 @@ import { Upload, FileText, CheckCircle, Download, FileSpreadsheet } from "lucide
 import { useToast } from "@/hooks/use-toast"
 import { Sale, generateId } from "@/lib/storage"
 import * as XLSX from 'xlsx'
+import { convertToPushinPayFormat } from "@/lib/pushinpay-converter"
 
 interface CSVImportProps {
   onImport: (sales: Sale[]) => void
@@ -25,6 +26,8 @@ export function CSVImport({ onImport }: CSVImportProps) {
   })
   const [availableColumns, setAvailableColumns] = useState<string[]>([])
   const [previewData, setPreviewData] = useState<any[]>([])
+  const [showConverter, setShowConverter] = useState(false)
+  const [convertedFile, setConvertedFile] = useState<Blob | null>(null)
   const { toast } = useToast()
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -341,6 +344,77 @@ export function CSVImport({ onImport }: CSVImportProps) {
     })
   }
 
+  const handleConvertToPushinPay = async () => {
+    if (!file) {
+      toast({
+        title: "Erro",
+        description: "Por favor, selecione um arquivo primeiro.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      let data: any[] = []
+      
+      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        const buffer = await file.arrayBuffer()
+        const workbook = XLSX.read(buffer, { type: 'buffer' })
+        const sheetName = workbook.SheetNames[0]
+        const worksheet = workbook.Sheets[sheetName]
+        data = XLSX.utils.sheet_to_json(worksheet, { header: 1 })
+      } else {
+        const text = await file.text()
+        const lines = text.split('\n')
+        data = lines.map(line => line.split(',').map(cell => cell.trim().replace(/"/g, '')))
+      }
+
+      if (data.length > 0) {
+        const convertedData = convertToPushinPayFormat(data)
+        
+        // Create Excel file with converted data
+        const worksheet = XLSX.utils.aoa_to_sheet(convertedData)
+        const workbook = XLSX.utils.book_new()
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Vendas PushinPay')
+        
+        const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
+        const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+        
+        setConvertedFile(blob)
+        setShowConverter(true)
+        
+        toast({
+          title: "Sucesso!",
+          description: `Arquivo convertido com ${convertedData.length - 1} registros de vendas individuais.`,
+        })
+      }
+    } catch (error) {
+      toast({
+        title: "Erro",
+        description: "Erro ao converter o arquivo: " + (error as Error).message,
+        variant: "destructive"
+      })
+    }
+  }
+
+  const downloadConvertedFile = () => {
+    if (!convertedFile) return
+    
+    const url = URL.createObjectURL(convertedFile)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `vendas-pushinpay-${new Date().toISOString().split('T')[0]}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    
+    toast({
+      title: "Download iniciado!",
+      description: "Arquivo convertido baixado com sucesso.",
+    })
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -357,10 +431,19 @@ export function CSVImport({ onImport }: CSVImportProps) {
           <Button
             variant="outline"
             onClick={downloadExampleFile}
-            className="flex-1"
+            className="flex-1 text-xs"
           >
             <Download className="h-4 w-4 mr-2" />
-            Baixar Exemplo
+            Exemplo Diário
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleConvertToPushinPay}
+            disabled={!file}
+            className="flex-1 text-xs"
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-2" />
+            Converter p/ PushinPay
           </Button>
         </div>
 
@@ -435,12 +518,47 @@ export function CSVImport({ onImport }: CSVImportProps) {
           </div>
         )}
 
+        {showConverter && convertedFile && (
+          <div className="p-4 bg-green-50 dark:bg-green-950/20 rounded-lg border border-green-200 dark:border-green-800">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-green-600" />
+                <h4 className="font-medium text-green-800 dark:text-green-200">
+                  Conversão Concluída!
+                </h4>
+              </div>
+            </div>
+            <p className="text-sm text-green-700 dark:text-green-300 mb-3">
+              Sua planilha foi convertida para o formato transacional do PushinPay. 
+              Cada linha de venda agregada foi expandida em registros individuais.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                onClick={downloadConvertedFile}
+                size="sm"
+                className="bg-green-600 hover:bg-green-700"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Baixar Arquivo Convertido
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowConverter(false)}
+              >
+                Fechar
+              </Button>
+            </div>
+          </div>
+        )}
+
         {availableColumns.length > 0 && (
           <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
             <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">Formatos Suportados:</h4>
             <ul className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
               <li>• <strong>Formato Diário:</strong> Ano, Mês, Dia, Vendas, Valor Vendas, Total Recebido</li>
               <li>• <strong>Formato PushinPay:</strong> Data, Valor Bruto, Valor Líquido</li>
+              <li>• <strong>Conversão Automática:</strong> Transforma vendas agregadas em registros individuais</li>
             </ul>
           </div>
         )}
