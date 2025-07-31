@@ -431,21 +431,33 @@ export function CSVImport({ onImport }: CSVImportProps) {
           <Button
             variant="outline"
             onClick={downloadExampleFile}
-            className="flex-1 text-xs"
+            className="flex-1"
           >
             <Download className="h-4 w-4 mr-2" />
-            Exemplo Diário
+            Exemplo Agregado
           </Button>
           <Button
             variant="outline"
-            onClick={handleConvertToPushinPay}
-            disabled={!file}
-            className="flex-1 text-xs"
+            onClick={downloadPushinPayExample}
+            className="flex-1"
           >
-            <FileSpreadsheet className="h-4 w-4 mr-2" />
-            Converter p/ PushinPay
+            <Download className="h-4 w-4 mr-2" />
+            Exemplo PushinPay
           </Button>
         </div>
+
+        {file && (
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              onClick={handleConvertToPushinPay}
+              className="w-full"
+            >
+              <FileSpreadsheet className="h-4 w-4 mr-2" />
+              🔄 Converter para Formato PushinPay
+            </Button>
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="file-input">Arquivo CSV ou Excel</Label>
